@@ -1,0 +1,16 @@
+opencv-python
+numpy
+Pillow
+torch
+torchvision
+torchaudio
+transformers
+sentencepiece
+tensorflow
+tqdm
+pyttsx3
+vosk
+sounddevice
+pyaudio
+pyzbar
+regex
