@@ -1,4 +1,5 @@
 import torch
+import os
 
 class Settings:
     """
@@ -16,7 +17,9 @@ class Settings:
     # ----------------------------
     USE_ESP32 = False        # False → use Mac camera | True → use ESP32 stream
     CAMERA_INDEX = 0         # Mac camera index
-    ESP32_URL = "http://192.168.4.1/capture"  # ESP32 stream (future use)
+    CAMERA_MODE = "esp32"
+    IMAGE_SAVE_PATH = "captured/frame.jpg"
+    ESP32_URL = "http://192.168.157.207:81/stream"
 
     IMAGE_SAVE_PATH = "captured/frame.jpg"
 
@@ -43,7 +46,9 @@ class Settings:
     TTS_VOLUME = 1.0         # max volume
 
         # Speech-to-text (vosk)
-    VOSK_MODEL_PATH = "models/vosk/vosk-model-small-en-us-0.15"
+    # Construct an absolute path to the project root (vision_goggles directory)
+    PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    VOSK_MODEL_PATH = os.path.join(PROJECT_ROOT, "models/vosk/vosk-model-small-en-us-0.15")
 
 
     # ----------------------------
