@@ -7,6 +7,7 @@ main.py — Final (ESP32 default, Speed mode, Ultra-clean terminal, Medium analy
 - Ultra-clean terminal output (only concise result block)
 - Full analysis logged to logs/analysis_TIMESTAMP.txt (one JSON per request)
 - Supports --debug (typed commands) and normal voice mode
+- Offline YOLO integrated for scene description (models/yolo/yolov8n.pt)
 """
 
 import os
@@ -30,6 +31,11 @@ from modules.object_query.product_detector import ProductDetector
 from modules.object_query.product_details import ProductDetailsExtractor
 from modules.audio.tts_engine import TTSEngine
 from modules.audio.stt_engine import STTEngine
+from modules.object_query.color_detector import ColorDetector
+
+
+# NEW: YOLO detector (offline)
+from modules.object_query.yolo_detector import YOLODetector
 
 # Helpers
 import cv2
@@ -73,11 +79,10 @@ class VisionGogglesController:
         self.speed_mode = speed_mode
         # initialize core components
         try:
-            self.camera = Camera() 
-            self.camera.start() # Both cameras now have a start method
+            self.camera = Camera()
+            self.camera.start()
             self.camera_start_time = time.time()
         except Exception:
-            # if camera fails at init, raise so user sees immediate error
             raise
 
         self.ocr = OCRReader()
@@ -88,6 +93,18 @@ class VisionGogglesController:
         self.tts = TTSEngine()
         self.stt = STTEngine()
         self.logger = SimpleLogger()
+
+        # Initialize offline YOLO detector (models/yolo/yolov8n.pt expected)
+        try:
+            self.yolo = YOLODetector(model_path="models/yolo/yolov8n.pt")
+            
+        except Exception:
+            # If model missing or fails, keep going without YOLO
+            if settings.DEBUG:
+                print("YOLO initialization failed:", traceback.format_exc())
+            self.yolo = None
+        
+        self.color_detector = ColorDetector()
 
         # Force BLIP & CLIP to CPU to avoid MPS/CPU mismatch and crashes
         try:
@@ -308,7 +325,7 @@ class VisionGogglesController:
         per_frame = []
         merged_text = ""
         avg_conf = 0.0
-        
+
         # Capture a single frame first for all operations
         frame = self.camera.last_frame
 
@@ -352,6 +369,16 @@ class VisionGogglesController:
                 details_struct = None
                 details_formatted = None
 
+        # Run YOLO only for relevant intents (describe / identify / name)
+        yolo_detections = []
+        try:
+            if self.yolo and (intent_describe or intent_identify or intent_name):
+                yolo_detections = self.yolo.detect(frame_for_models)
+        except Exception:
+            yolo_detections = []
+            if settings.DEBUG:
+                traceback.print_exc()
+
         user_output_type = None
         user_output_value = None
 
@@ -380,6 +407,9 @@ class VisionGogglesController:
                     name = prod_report
             if not name:
                 name = self.extract_product_name(merged_text, per_frame, blip_caption)
+            # If YOLO found a clear class with high score, prefer it as short hint (optional)
+            if not name and yolo_detections:
+                name = yolo_detections[0][0]
             user_output_type = "name"
             user_output_value = name
 
@@ -398,7 +428,27 @@ class VisionGogglesController:
 
         elif intent_describe:
             user_output_type = "describe"
-            user_output_value = blip_caption
+            # Medium style: BLIP + YOLO detections with confidences
+            if yolo_detections:
+                det_text = ", ".join([f"{name} ({score*100:.0f}%)" for name, score in yolo_detections])
+                if blip_caption:
+                    dominant_color = "unknown"
+                    if yolo_detections and yolo_detections[0][0] == "person":
+                        dominant_color = self.color_detector.detect_dominant_color(frame_for_models)
+
+                    if yolo_detections:
+                        det_text = ", ".join([f"{name} ({score*100:.0f}%)" for name, score in yolo_detections])
+                        if dominant_color != "unknown":
+                            user_output_value = f"{blip_caption}. I also detected: {det_text}. The person appears to be wearing {dominant_color} clothing."
+                        else:
+                            user_output_value = f"{blip_caption}. I also detected: {det_text}."
+                    else:
+                        user_output_value = blip_caption
+
+                else:
+                    user_output_value = f"I detected: {det_text}."
+            else:
+                user_output_value = blip_caption or "No notable objects detected."
 
         elif intent_identify:
             name_guess = None
@@ -410,6 +460,8 @@ class VisionGogglesController:
             if not name_guess:
                 if merged_text and merged_text != "No readable text found.":
                     name_guess = self.extract_product_name(merged_text, per_frame, blip_caption)
+            if not name_guess and yolo_detections:
+                name_guess = yolo_detections[0][0]
             if not name_guess and clip_scores:
                 name_guess = clip_scores[0][0]
             if not name_guess:
@@ -425,6 +477,8 @@ class VisionGogglesController:
                 parts.append(blip_caption)
             if clip_scores:
                 parts.append(f"{clip_scores[0][0]} ({clip_scores[0][1]:.2f})")
+            if yolo_detections:
+                parts.append(", ".join([f"{n}({s*100:.0f}%)" for n, s in yolo_detections[:3]]))
             user_output_type = "summary"
             user_output_value = " — ".join(parts) if parts else "No result"
 
@@ -445,6 +499,7 @@ class VisionGogglesController:
             "blip_candidates": blip_candidates,
             "blip_caption": blip_caption,
             "clip_top": clip_scores,
+            "yolo": yolo_detections,
             "product_detector": prod_report,
             "product_details_struct": details_struct,
             "product_details_formatted": details_formatted,

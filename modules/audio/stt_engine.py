@@ -55,7 +55,7 @@ class STTEngine:
                             print(f"🗣️ Recognized: {text}")
                         return text
 
-    def listen_for_wake_word(self, wake_words=["assistant", "hey assistant"]):
+    def listen_for_wake_word(self, wake_words=["assistant", "hey assistant","hey","hello"]):
         """
         Listens continuously until a wake-word is spoken.
         """
